@@ -1,0 +1,54 @@
+# Bicycle Daemon Configuration Example
+
+# Daemon configuration
+daemon:
+  log_level: info  # debug, info, warn, error
+  broker_buffer_size: 100  # Buffer size for message broker subscriptions
+  publish_timeout: 5  # Timeout for publishing messages (seconds)
+
+# Execution mode: daemon or interactive
+mode: daemon
+
+# Plugin configuration
+plugins:
+  # State management plugin
+  state_memory:
+    enabled: true
+    settings: {}
+
+  # TUI plugin (interactive mode only)
+  tui:
+    enabled: false  # Enable in interactive mode
+    settings:
+      theme: default
+
+  # Telegram bot plugin
+  telegram:
+    enabled: false  # Set to true to enable
+    settings:
+      token: ""  # Set your Telegram bot token here
+      # Alternative: use TELEGRAM_TOKEN environment variable
+
+  # WebSocket plugin
+  websocket:
+    enabled: false
+    settings:
+      port: 8080
+      host: "0.0.0.0"
+
+  # REST API plugin
+  rest:
+    enabled: false
+    settings:
+      port: 8081
+      host: "0.0.0.0"
+      auth_token: ""  # Optional authentication token
+
+  # LLM executor plugin
+  llm:
+    enabled: false
+    settings:
+      provider: openai  # openai, anthropic, etc.
+      api_key: ""  # Set your API key here
+      model: gpt-4
+      # Alternative: use OPENAI_API_KEY environment variable
