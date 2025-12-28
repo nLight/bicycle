@@ -9,6 +9,7 @@ import (
 
 	"bicycle/cmd"
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -74,7 +75,7 @@ func (p *TelegramPlugin) CheckRequirements(ctx context.Context) error {
 // getToken retrieves the Telegram token from config or environment
 func (p *TelegramPlugin) getToken(ctx context.Context) string {
 	// Try config first
-	if cfg, ok := ctx.Value("config").(*config.Config); ok {
+	if cfg, ok := ctx.Value(ctxkeys.Config).(*config.Config); ok {
 		if token, ok := cfg.GetPluginSettingString("telegram", "token"); ok && token != "" {
 			return token
 		}
@@ -120,12 +121,15 @@ func (p *TelegramPlugin) Start(ctx context.Context, broker plugin.MessageBroker)
 
 // Stop shuts down the Telegram bot
 func (p *TelegramPlugin) Stop(ctx context.Context) error {
+	// Signal goroutines to stop
 	close(p.stopCh)
 
+	// Stop receiving updates first (this closes the updates channel)
 	if p.bot != nil {
 		p.bot.StopReceivingUpdates()
 	}
 
+	// Unsubscribe from broker (this closes msgCh)
 	if p.broker != nil {
 		p.broker.Unsubscribe("telegram")
 	}
@@ -174,7 +178,11 @@ func (p *TelegramPlugin) handleTelegramUpdates() {
 
 	for {
 		select {
-		case update := <-updates:
+		case update, ok := <-updates:
+			if !ok {
+				// Channel closed by StopReceivingUpdates
+				return
+			}
 			if update.Message == nil {
 				continue
 			}
@@ -189,6 +197,9 @@ func (p *TelegramPlugin) handleTelegramUpdates() {
 			p.processMessage(update.Message)
 
 		case <-p.stopCh:
+			// Drain remaining updates before returning
+			for range updates {
+			}
 			return
 		}
 	}

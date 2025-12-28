@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 )
 
@@ -91,9 +92,9 @@ func (d *Daemon) Start() error {
 	log.Println("[Daemon] Starting daemon...")
 
 	// Create context with mode
-	ctx := context.WithValue(d.ctx, "mode", d.config.Mode)
-	ctx = context.WithValue(ctx, "daemon", d)
-	ctx = context.WithValue(ctx, "config", d.config)
+	ctx := context.WithValue(d.ctx, ctxkeys.Mode, d.config.Mode)
+	ctx = context.WithValue(ctx, ctxkeys.Daemon, d)
+	ctx = context.WithValue(ctx, ctxkeys.Config, d.config)
 
 	// Configure broker
 	d.broker.SetPublishTimeout(time.Duration(d.config.Daemon.PublishTimeout) * time.Second)
@@ -266,30 +267,37 @@ func (d *Daemon) GetPlugins() []plugin.Plugin {
 // ExecuteTask executes a task using the registered executor
 func (d *Daemon) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	if d.state != StateIdle {
+		d.mu.Unlock()
 		return fmt.Errorf("daemon is not idle (current state: %s)", d.state)
 	}
 
 	if d.executor == nil {
+		d.mu.Unlock()
 		return fmt.Errorf("no executor available")
 	}
 
 	d.currentTask = task
 	d.state = StateWorking
 
+	// Capture references before releasing lock to avoid race
+	executor := d.executor
+	broker := d.broker
+
 	log.Printf("[Daemon] Executing task: %s (ID: %s)", task.Type, task.ID)
 
-	// Execute in background
 	d.wg.Add(1)
+	d.mu.Unlock()
+
+	// Execute in background with captured references
 	go func() {
 		defer d.wg.Done()
 
-		if err := d.executor.ExecuteTask(ctx, task); err != nil {
+		if err := executor.ExecuteTask(ctx, task); err != nil {
 			log.Printf("[Daemon] Task execution failed: %v", err)
 			// Publish error message
-			d.broker.Publish(ctx, plugin.Message{
+			broker.Publish(ctx, plugin.Message{
 				Topic:   "notification",
 				Payload: fmt.Sprintf("Task failed: %v", err),
 				Source:  "daemon",
@@ -297,7 +305,7 @@ func (d *Daemon) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 		} else {
 			log.Printf("[Daemon] Task completed successfully")
 			// Publish completion message
-			d.broker.Publish(ctx, plugin.Message{
+			broker.Publish(ctx, plugin.Message{
 				Topic:   "notification",
 				Payload: "Task completed successfully",
 				Source:  "daemon",

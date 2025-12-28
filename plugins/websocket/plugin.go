@@ -10,6 +10,7 @@ import (
 
 	"bicycle/cmd"
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 
 	"github.com/gorilla/websocket"
@@ -84,7 +85,7 @@ func (p *WebSocketPlugin) Start(ctx context.Context, broker plugin.MessageBroker
 
 	// Get port from config
 	port := 8080
-	if cfg, ok := ctx.Value("config").(*config.Config); ok {
+	if cfg, ok := ctx.Value(ctxkeys.Config).(*config.Config); ok {
 		if portVal, ok := cfg.GetPluginSettingInt("websocket", "port"); ok {
 			port = portVal
 		}
@@ -278,13 +279,18 @@ func (p *WebSocketPlugin) sendToClient(conn *websocket.Conn, msg WSMessage) {
 
 // broadcast sends a message to all connected clients
 func (p *WebSocketPlugin) broadcast(msg WSMessage) {
+	// Copy client list under lock to avoid race with handleClientMessages
 	p.mu.RLock()
-	defer p.mu.RUnlock()
+	clients := make([]*websocket.Conn, 0, len(p.clients))
+	for conn := range p.clients {
+		clients = append(clients, conn)
+	}
+	p.mu.RUnlock()
 
 	data, _ := json.Marshal(msg)
-	log.Printf("[WebSocket] Broadcasting: %s", string(data))
+	log.Printf("[WebSocket] Broadcasting to %d client(s): %s", len(clients), string(data))
 
-	for conn := range p.clients {
+	for _, conn := range clients {
 		if err := conn.WriteJSON(msg); err != nil {
 			log.Printf("[WebSocket] Broadcast error: %v", err)
 		}

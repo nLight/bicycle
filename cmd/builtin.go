@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 )
 
@@ -58,7 +59,7 @@ func handleHelp(ctx context.Context, args []string) (*plugin.CommandResult, erro
 	}
 
 	// Otherwise show all commands
-	mode, ok := ctx.Value("mode").(plugin.Mode)
+	mode, ok := ctx.Value(ctxkeys.Mode).(plugin.Mode)
 	if !ok {
 		mode = plugin.ModeDaemon // Default to daemon mode
 	}
@@ -70,7 +71,7 @@ func handleHelp(ctx context.Context, args []string) (*plugin.CommandResult, erro
 // handleStatus shows the current daemon status
 func handleStatus(ctx context.Context, args []string) (*plugin.CommandResult, error) {
 	// Try to get daemon instance from context
-	daemon, ok := ctx.Value("daemon").(StatusProvider)
+	daemon, ok := ctx.Value(ctxkeys.Daemon).(StatusProvider)
 	if !ok {
 		return &plugin.CommandResult{
 			Output: "Status: Running (daemon context not available)",
@@ -87,7 +88,7 @@ func handleStatus(ctx context.Context, args []string) (*plugin.CommandResult, er
 // handleReset resets the daemon to idle state
 func handleReset(ctx context.Context, args []string) (*plugin.CommandResult, error) {
 	// Try to get daemon instance from context
-	daemon, ok := ctx.Value("daemon").(Resettable)
+	daemon, ok := ctx.Value(ctxkeys.Daemon).(Resettable)
 	if !ok {
 		return nil, fmt.Errorf("reset not available (daemon context not available)")
 	}
