@@ -31,6 +31,9 @@ type DaemonConfig struct {
 
 	// PublishTimeout is the timeout for publishing messages (in seconds)
 	PublishTimeout int `yaml:"publish_timeout"`
+
+	// DataDir is the directory for persistent state storage
+	DataDir string `yaml:"data_dir"`
 }
 
 // PluginConfig contains configuration for a specific plugin
@@ -82,6 +85,7 @@ func DefaultConfig() *Config {
 			LogLevel:         "info",
 			BrokerBufferSize: 100,
 			PublishTimeout:   5,
+			DataDir:          ".bicycle",
 		},
 		Plugins: make(map[string]PluginConfig),
 		Mode:    plugin.ModeDaemon,
@@ -100,6 +104,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.Daemon.PublishTimeout == 0 {
 		c.Daemon.PublishTimeout = 5
+	}
+	if c.Daemon.DataDir == "" {
+		c.Daemon.DataDir = ".bicycle"
 	}
 
 	// Mode defaults

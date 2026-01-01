@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"log"
 	"strings"
+
+	"bicycle/internal/ctxkeys"
 )
 
 // Requirement represents a single requirement check
@@ -109,7 +111,7 @@ func (rc *RequirementChecker) Check(ctx context.Context) error {
 // RequireMode creates a requirement that checks for a specific mode
 func RequireMode(requiredMode Mode) func(ctx context.Context) error {
 	return func(ctx context.Context) error {
-		mode, ok := ctx.Value("mode").(Mode)
+		mode, ok := ctx.Value(ctxkeys.Mode).(Mode)
 		if !ok {
 			return fmt.Errorf("mode not set in context")
 		}

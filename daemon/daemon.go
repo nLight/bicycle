@@ -4,11 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
+	"bicycle/state"
 )
 
 // State represents the daemon's current state
@@ -40,6 +43,9 @@ type Daemon struct {
 	// Current task information
 	currentTask *plugin.Task
 	executor    plugin.Executor
+
+	// State persistence
+	stateManager *state.Manager
 }
 
 // New creates a new daemon instance
@@ -54,6 +60,38 @@ func New(cfg *config.Config) *Daemon {
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+}
+
+// initStateManager initializes the state manager with file backend
+func (d *Daemon) initStateManager() error {
+	dataDir := d.config.Daemon.DataDir
+	if dataDir == "" {
+		dataDir = ".bicycle"
+	}
+
+	stateDir := filepath.Join(dataDir, "state")
+	backend, err := state.NewFileBackend(stateDir)
+	if err != nil {
+		return fmt.Errorf("failed to initialize state backend: %w", err)
+	}
+
+	d.stateManager = state.NewManager(backend)
+	log.Printf("[Daemon] State manager initialized at: %s", stateDir)
+	return nil
+}
+
+// SetStateManager sets a custom state manager (useful for testing)
+func (d *Daemon) SetStateManager(sm *state.Manager) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stateManager = sm
+}
+
+// GetStateManager returns the state manager
+func (d *Daemon) GetStateManager() *state.Manager {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.stateManager
 }
 
 // AddPlugin adds a plugin to the daemon
@@ -90,10 +128,17 @@ func (d *Daemon) Start() error {
 
 	log.Println("[Daemon] Starting daemon...")
 
+	// Initialize state manager if not already set
+	if d.stateManager == nil {
+		if err := d.initStateManager(); err != nil {
+			log.Printf("[Daemon] Warning: state persistence disabled: %v", err)
+		}
+	}
+
 	// Create context with mode
-	ctx := context.WithValue(d.ctx, "mode", d.config.Mode)
-	ctx = context.WithValue(ctx, "daemon", d)
-	ctx = context.WithValue(ctx, "config", d.config)
+	ctx := context.WithValue(d.ctx, ctxkeys.Mode, d.config.Mode)
+	ctx = context.WithValue(ctx, ctxkeys.Daemon, d)
+	ctx = context.WithValue(ctx, ctxkeys.Config, d.config)
 
 	// Configure broker
 	d.broker.SetPublishTimeout(time.Duration(d.config.Daemon.PublishTimeout) * time.Second)
@@ -163,6 +208,13 @@ func (d *Daemon) Stop() error {
 
 	// Close broker
 	d.broker.Close()
+
+	// Close state manager
+	if d.stateManager != nil {
+		if err := d.stateManager.Close(); err != nil {
+			log.Printf("[Daemon] Error closing state manager: %v", err)
+		}
+	}
 
 	// Wait for goroutines
 	d.wg.Wait()
@@ -266,30 +318,37 @@ func (d *Daemon) GetPlugins() []plugin.Plugin {
 // ExecuteTask executes a task using the registered executor
 func (d *Daemon) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
 
 	if d.state != StateIdle {
+		d.mu.Unlock()
 		return fmt.Errorf("daemon is not idle (current state: %s)", d.state)
 	}
 
 	if d.executor == nil {
+		d.mu.Unlock()
 		return fmt.Errorf("no executor available")
 	}
 
 	d.currentTask = task
 	d.state = StateWorking
 
+	// Capture references before releasing lock to avoid race
+	executor := d.executor
+	broker := d.broker
+
 	log.Printf("[Daemon] Executing task: %s (ID: %s)", task.Type, task.ID)
 
-	// Execute in background
 	d.wg.Add(1)
+	d.mu.Unlock()
+
+	// Execute in background with captured references
 	go func() {
 		defer d.wg.Done()
 
-		if err := d.executor.ExecuteTask(ctx, task); err != nil {
+		if err := executor.ExecuteTask(ctx, task); err != nil {
 			log.Printf("[Daemon] Task execution failed: %v", err)
 			// Publish error message
-			d.broker.Publish(ctx, plugin.Message{
+			broker.Publish(ctx, plugin.Message{
 				Topic:   "notification",
 				Payload: fmt.Sprintf("Task failed: %v", err),
 				Source:  "daemon",
@@ -297,7 +356,7 @@ func (d *Daemon) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 		} else {
 			log.Printf("[Daemon] Task completed successfully")
 			// Publish completion message
-			d.broker.Publish(ctx, plugin.Message{
+			broker.Publish(ctx, plugin.Message{
 				Topic:   "notification",
 				Payload: "Task completed successfully",
 				Source:  "daemon",

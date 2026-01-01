@@ -7,6 +7,7 @@ import (
 	"sort"
 	"sync"
 
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 )
 
@@ -106,7 +107,7 @@ func (cr *CommandRegistry) Execute(ctx context.Context, name string, args []stri
 	}
 
 	// Check mode compatibility
-	mode, ok := ctx.Value("mode").(plugin.Mode)
+	mode, ok := ctx.Value(ctxkeys.Mode).(plugin.Mode)
 	if ok && len(cmd.Modes) > 0 && !containsMode(cmd.Modes, mode) {
 		return nil, fmt.Errorf("command /%s not available in %s mode", name, mode)
 	}

@@ -10,6 +10,7 @@ import (
 
 	"bicycle/cmd"
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 )
 
@@ -38,6 +39,9 @@ type LLMPlugin struct {
 	currentTask *plugin.Task
 	progress    int
 	message     string
+
+	// Cancellation
+	cancelFunc context.CancelFunc
 
 	// Configuration
 	provider string
@@ -86,7 +90,7 @@ func (p *LLMPlugin) getConfig(ctx context.Context) (provider, apiKey, model stri
 	model = "gpt-4"
 
 	// Try config
-	if cfg, ok := ctx.Value("config").(*config.Config); ok {
+	if cfg, ok := ctx.Value(ctxkeys.Config).(*config.Config); ok {
 		if prov, ok := cfg.GetPluginSettingString("llm", "provider"); ok {
 			provider = prov
 		}
@@ -145,6 +149,11 @@ func (p *LLMPlugin) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 		p.mu.Unlock()
 		return fmt.Errorf("executor is busy")
 	}
+
+	// Create cancellable context for this task
+	taskCtx, cancel := context.WithCancel(ctx)
+	p.cancelFunc = cancel
+
 	p.state = plugin.ExecutorStateWorking
 	p.currentTask = task
 	p.progress = 0
@@ -164,12 +173,21 @@ func (p *LLMPlugin) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 	// For now, this is a stub that simulates work
 	for i := 0; i < 10; i++ {
 		select {
-		case <-ctx.Done():
+		case <-taskCtx.Done():
 			p.mu.Lock()
 			p.state = plugin.ExecutorStateIdle
 			p.currentTask = nil
+			p.cancelFunc = nil
+			p.message = "Task cancelled"
 			p.mu.Unlock()
-			return ctx.Err()
+
+			log.Printf("[LLM] Task cancelled: %s", task.ID)
+			p.broker.Publish(ctx, plugin.Message{
+				Topic:   "notification",
+				Payload: "Task cancelled",
+				Source:  "llm",
+			})
+			return taskCtx.Err()
 
 		case <-time.After(1 * time.Second):
 			p.mu.Lock()
@@ -190,6 +208,7 @@ func (p *LLMPlugin) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 	p.mu.Lock()
 	p.state = plugin.ExecutorStateIdle
 	p.currentTask = nil
+	p.cancelFunc = nil
 	p.progress = 100
 	p.message = "Task completed"
 	p.mu.Unlock()
@@ -217,10 +236,10 @@ func (p *LLMPlugin) CancelTask(ctx context.Context, taskID string) error {
 
 	log.Printf("[LLM] Cancelling task: %s", taskID)
 
-	// TODO: Implement actual cancellation logic
-	p.state = plugin.ExecutorStateIdle
-	p.currentTask = nil
-	p.message = "Task cancelled"
+	// Cancel the task context to stop execution
+	if p.cancelFunc != nil {
+		p.cancelFunc()
+	}
 
 	return nil
 }
@@ -286,7 +305,7 @@ func handleAsk(ctx context.Context, args []string) (*plugin.CommandResult, error
 	question := fmt.Sprintf("%v", args)
 
 	// Get daemon from context to execute task
-	daemon, ok := ctx.Value("daemon").(interface {
+	daemon, ok := ctx.Value(ctxkeys.Daemon).(interface {
 		ExecuteTask(context.Context, *plugin.Task) error
 	})
 	if !ok {

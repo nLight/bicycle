@@ -70,6 +70,9 @@ func (p *TUIPlugin) Start(ctx context.Context, broker plugin.MessageBroker) erro
 	// Start bubbletea program
 	p.program = tea.NewProgram(p.model, tea.WithAltScreen())
 
+	// Store program reference in model for addMessage
+	p.model.program = p.program
+
 	// Handle incoming messages in background
 	go p.handleMessages()
 
@@ -134,6 +137,7 @@ type model struct {
 	ctx      context.Context
 	broker   plugin.MessageBroker
 	router   *cmd.Router
+	program  *tea.Program
 	messages []message
 	input    string
 	width    int
@@ -252,8 +256,8 @@ func (m *model) processCommand(input string) {
 // addMessage adds a message to the chat
 func (m *model) addMessage(source, text string) {
 	// Send via program to ensure thread-safety
-	if p, ok := m.ctx.Value("program").(*tea.Program); ok {
-		p.Send(incomingMessageMsg{source: source, text: text})
+	if m.program != nil {
+		m.program.Send(incomingMessageMsg{source: source, text: text})
 	}
 }
 

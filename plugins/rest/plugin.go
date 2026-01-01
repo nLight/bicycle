@@ -9,6 +9,7 @@ import (
 
 	"bicycle/cmd"
 	"bicycle/internal/config"
+	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
 )
 
@@ -85,7 +86,7 @@ func (p *RESTPlugin) Start(ctx context.Context, broker plugin.MessageBroker) err
 	port := 8081
 	host := "0.0.0.0"
 
-	if cfg, ok := ctx.Value("config").(*config.Config); ok {
+	if cfg, ok := ctx.Value(ctxkeys.Config).(*config.Config); ok {
 		if portVal, ok := cfg.GetPluginSettingInt("rest", "port"); ok {
 			port = portVal
 		}
@@ -166,8 +167,14 @@ func (p *RESTPlugin) handleCommand(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[REST] Command request: %s %v", req.Command, req.Args)
 
+	// Build full command string with args
+	fullCommand := req.Command
+	for _, arg := range req.Args {
+		fullCommand += " " + arg
+	}
+
 	// Execute command
-	result, err := p.router.Route(p.ctx, req.Command)
+	result, err := p.router.Route(p.ctx, fullCommand)
 	if err != nil {
 		p.sendJSON(w, CommandResponse{
 			Success: false,
@@ -207,7 +214,7 @@ func (p *RESTPlugin) handleStatus(w http.ResponseWriter, r *http.Request) {
 
 	// Get status from daemon
 	var statusText string
-	if daemon, ok := p.ctx.Value("daemon").(interface {
+	if daemon, ok := p.ctx.Value(ctxkeys.Daemon).(interface {
 		GetStatus(context.Context) string
 	}); ok {
 		statusText = daemon.GetStatus(p.ctx)
