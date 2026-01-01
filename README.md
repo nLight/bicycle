@@ -12,9 +12,10 @@ Bicycle implements a plugin-based architecture that enables simultaneous interac
 - **Multi-Channel Communication**: TUI, Telegram, WebSocket, REST API
 - **Mode-Aware Commands**: Commands adapt to daemon vs interactive modes
 - **Extensible Task Execution**: Pluggable task executors (LLM agent, etc.)
-- **Pluggable State Management**: In-memory, file-based, or database backends
+- **Pluggable State Management**: In-memory and file-based backends with typed codec support
 - **Message Broker**: Topic-based pub/sub for inter-plugin communication
 - **Graceful Lifecycle**: Proper startup, shutdown, and requirement checking
+- **Swarm Orchestration**: Multi-agent task orchestration with verification and retry support
 
 ## Architecture
 
@@ -31,6 +32,10 @@ Bicycle implements a plugin-based architecture that enables simultaneous interac
 
 3. **State Plugins**: Manage persistent state
    - `state_memory`: In-memory state storage
+   - `state_file`: File-based state persistence
+
+4. **Orchestration Plugins**: Coordinate multi-agent workflows
+   - `swarm`: Multi-agent task orchestration with verification
 
 ### Core Components
 
@@ -50,13 +55,30 @@ bicycle/
 │   ├── router.go             # Command routing
 │   └── builtin.go            # Built-in commands
 ├── internal/config/           # Configuration management
+├── state/                     # State management
+│   ├── backend.go            # Backend interface
+│   ├── memory.go             # In-memory backend
+│   ├── file.go               # File-based backend
+│   ├── manager.go            # State manager
+│   └── codec.go              # Encoding/decoding
+├── swarm/                     # Swarm orchestration
+│   ├── types.go              # Core types (Task, Agent, Project)
+│   ├── orchestrator.go       # Main orchestrator
+│   ├── queue.go              # Task queue management
+│   ├── registry.go           # Agent registry
+│   ├── worker.go             # Worker agent implementation
+│   ├── spawner.go            # Agent spawning
+│   ├── verifier.go           # Task verification
+│   ├── llm.go                # LLM client interface
+│   └── anthropic.go          # Anthropic API integration
 └── plugins/                   # Plugin implementations
-    ├── state/memory/         # In-memory state
+    ├── state/memory/         # In-memory state plugin
     ├── tui/                  # Terminal UI
     ├── telegram/             # Telegram bot
     ├── websocket/            # WebSocket server
     ├── rest/                 # REST API
-    └── executor/llm/         # LLM executor
+    ├── executor/llm/         # LLM executor
+    └── swarm/                # Swarm orchestration plugin
 ```
 
 ## Getting Started
@@ -208,6 +230,17 @@ All plugins have access to these built-in commands:
 - `/reset` - Stop current task and reset to idle state
 - `/plugins` - List all registered plugins
 - `/ask <question>` - Ask the LLM executor a question (if LLM plugin is enabled)
+
+### Swarm Commands
+
+When the swarm plugin is enabled:
+
+- `/swarm` - Show swarm management help
+- `/swarm-create <project-id> [worker-model] [verifier-model]` - Create a new swarm project
+- `/swarm-start <project-id> [worker-count]` - Start a project with workers
+- `/swarm-stop <project-id>` - Stop a project
+- `/swarm-task <project-id> <type> <title> <description>` - Add a task to a project
+- `/swarm-status [project-id]` - Show project status or list all projects
 
 ## Using the Interaction Plugins
 
@@ -396,13 +429,132 @@ Standard topics used by the system:
 
 Plugins can define custom topics for their own use.
 
+## Swarm Orchestration
+
+The swarm package provides a multi-agent orchestration system for coordinating LLM-powered workers on complex tasks.
+
+### Concepts
+
+- **Project**: A container for tasks and agents working toward a common goal
+- **Task**: A unit of work with acceptance criteria, priority, and retry limits
+- **Agent**: A worker (typically LLM-powered) that executes tasks
+- **Orchestrator**: Manages task assignment, verification, and agent health
+- **Verifier**: Reviews completed tasks and approves or requests revisions
+
+### Workflow
+
+1. Create a project with `/swarm-create`
+2. Start the project with `/swarm-start` to spawn worker agents
+3. Add tasks with `/swarm-task`
+4. The orchestrator automatically:
+   - Assigns pending tasks to idle workers
+   - Monitors agent health via heartbeats
+   - Verifies completed tasks using an LLM verifier
+   - Requests revisions if tasks don't meet acceptance criteria
+   - Retries failed tasks up to the configured limit
+
+### Agent Roles
+
+- **Worker**: Executes assigned tasks
+- **Orchestrator**: Coordinates task assignment and verification
+- **Reviewer**: Reviews task output (verification role)
+- **Architect**: Plans and breaks down complex tasks (future)
+
+### Task Lifecycle
+
+```
+pending → assigned → in_progress → review → completed
+                                       ↓
+                                   revision → (retry) → assigned
+                                       ↓
+                                   failed (max retries exceeded)
+```
+
+### Configuration
+
+```yaml
+plugins:
+  swarm:
+    enabled: true
+    settings:
+      verification_interval: 10s
+      assignment_interval: 5s
+      health_check_interval: 30s
+```
+
+### Verification Policy
+
+Projects can configure verification behavior:
+
+```go
+VerificationPolicy{
+    BatchSize:           1,     // Verify every N completions
+    ConfidenceThreshold: 0.8,   // Auto-verify if confidence > threshold
+    MaxRetries:          3,     // Retry limit before marking failed
+    SkipLabels:          []string{"trivial"},     // Skip verification
+    AlwaysVerifyLabels:  []string{"critical"},    // Always verify
+}
+```
+
+## State Management
+
+The `state` package provides pluggable backends for persistent storage.
+
+### Backends
+
+- **Memory**: In-memory storage (default, non-persistent)
+- **File**: JSON-based file storage
+
+### Usage
+
+```go
+// Create a file backend
+backend, err := state.NewFileBackend("/path/to/state")
+
+// Create a manager with typed operations
+manager := state.NewManager(backend)
+
+// Store and retrieve typed values
+err = manager.Set(ctx, "key", myStruct)
+err = manager.Get(ctx, "key", &result)
+```
+
+## Testing
+
+Run the test suite:
+
+```bash
+go test ./...
+```
+
+Run with race detector:
+
+```bash
+go test -race ./...
+```
+
+## GitHub Actions
+
+Tests run automatically on pull requests and pushes to main. See `.github/workflows/test.yml`.
+
 ## Project Status
 
-This is version 0.1.0 - initial implementation. The LLM executor is currently a stub that simulates task execution. Future versions will include:
+This is version 0.2.0. Recent additions include:
 
-- Full LLM API integration (OpenAI, Anthropic, etc.)
-- File-based and database state plugins
-- Additional interaction plugins
+- **Swarm Orchestration**: Complete multi-agent task orchestration system with:
+  - Task queue with priority scheduling
+  - Agent registry with health monitoring
+  - LLM-powered verification
+  - Automatic retry with feedback
+  - Anthropic API integration
+- **State Management**: Pluggable state backends (memory and file-based)
+- **Unit Tests**: Comprehensive test coverage for core packages
+- **CI/CD**: GitHub Actions workflow for automated testing
+
+Future versions will include:
+
+- OpenAI API integration
+- Database state backends (SQLite, PostgreSQL)
 - Plugin hot-reloading
 - Metrics and monitoring
 - Web dashboard
