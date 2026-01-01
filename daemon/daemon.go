@@ -320,8 +320,9 @@ func (d *Daemon) ExecuteTask(ctx context.Context, task *plugin.Task) error {
 	d.mu.Lock()
 
 	if d.state != StateIdle {
+		currentState := d.state
 		d.mu.Unlock()
-		return fmt.Errorf("daemon is not idle (current state: %s)", d.state)
+		return fmt.Errorf("daemon is not idle (current state: %s)", currentState)
 	}
 
 	if d.executor == nil {
