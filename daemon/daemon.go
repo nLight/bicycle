@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"path/filepath"
 	"sync"
 	"time"
 
 	"bicycle/internal/config"
 	"bicycle/internal/ctxkeys"
 	"bicycle/plugin"
+	"bicycle/state"
 )
 
 // State represents the daemon's current state
@@ -41,6 +43,9 @@ type Daemon struct {
 	// Current task information
 	currentTask *plugin.Task
 	executor    plugin.Executor
+
+	// State persistence
+	stateManager *state.Manager
 }
 
 // New creates a new daemon instance
@@ -55,6 +60,38 @@ func New(cfg *config.Config) *Daemon {
 		ctx:     ctx,
 		cancel:  cancel,
 	}
+}
+
+// initStateManager initializes the state manager with file backend
+func (d *Daemon) initStateManager() error {
+	dataDir := d.config.Daemon.DataDir
+	if dataDir == "" {
+		dataDir = ".bicycle"
+	}
+
+	stateDir := filepath.Join(dataDir, "state")
+	backend, err := state.NewFileBackend(stateDir)
+	if err != nil {
+		return fmt.Errorf("failed to initialize state backend: %w", err)
+	}
+
+	d.stateManager = state.NewManager(backend)
+	log.Printf("[Daemon] State manager initialized at: %s", stateDir)
+	return nil
+}
+
+// SetStateManager sets a custom state manager (useful for testing)
+func (d *Daemon) SetStateManager(sm *state.Manager) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.stateManager = sm
+}
+
+// GetStateManager returns the state manager
+func (d *Daemon) GetStateManager() *state.Manager {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.stateManager
 }
 
 // AddPlugin adds a plugin to the daemon
@@ -90,6 +127,13 @@ func (d *Daemon) Start() error {
 	}
 
 	log.Println("[Daemon] Starting daemon...")
+
+	// Initialize state manager if not already set
+	if d.stateManager == nil {
+		if err := d.initStateManager(); err != nil {
+			log.Printf("[Daemon] Warning: state persistence disabled: %v", err)
+		}
+	}
 
 	// Create context with mode
 	ctx := context.WithValue(d.ctx, ctxkeys.Mode, d.config.Mode)
@@ -164,6 +208,13 @@ func (d *Daemon) Stop() error {
 
 	// Close broker
 	d.broker.Close()
+
+	// Close state manager
+	if d.stateManager != nil {
+		if err := d.stateManager.Close(); err != nil {
+			log.Printf("[Daemon] Error closing state manager: %v", err)
+		}
+	}
 
 	// Wait for goroutines
 	d.wg.Wait()
